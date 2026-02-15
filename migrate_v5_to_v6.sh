@@ -1,9 +1,9 @@
 #!/bin/bash
 
 ################################################################################
-# AMXBans v5 to v6.14.4 Database Migration Script (Bash/Shell version)
+# AMXBans v5.0 to v6.14.4 Database Migration Script (Bash/Shell version)
 #
-# This script migrates data from AMXBans v5 database to v6.14.4 schema.
+# This script migrates data from AMXBans v5.0 database to v6.14.4 schema.
 #
 # Usage:
 #   1. Update configuration below with your database credentials
@@ -20,19 +20,24 @@ set -e  # Exit on error
 # CONFIGURATION - MODIFY THESE VALUES
 # =====================================================================
 
-# Source database (v5)
+# Source database (v5.0)
 V5_HOST="127.0.0.1"
-V5_USER="user"
-V5_PASSWORD="pass"
+V5_USER="fred"
+V5_PASSWORD="geheim"
 V5_DB="amx5-src"
 V5_PREFIX="amx_"
 
-# Target database (v6)
+# Target database (v6.14.4)
 V6_HOST="127.0.0.1"
-V6_USER="user"
-V6_PASSWORD="pass"
+V6_USER="fred"
+V6_PASSWORD="geheim"
 V6_DB="amxbans6"
 V6_PREFIX="amx_"
+
+# Backup configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_DIR="$SCRIPT_DIR/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Colors for output
 RED='\033[0;31m'
@@ -120,6 +125,65 @@ count_rows() {
     fi
 }
 
+# Create backup directory if it doesn't exist
+create_backup_dir() {
+    if [ ! -d "$BACKUP_DIR" ]; then
+        mkdir -p "$BACKUP_DIR"
+        log_success "Created backup directory: $BACKUP_DIR"
+    fi
+}
+
+# Create "Source" backup (v5 before migration)
+create_source_backup() {
+    log_info "Creating Source backup (v5 before migration)"
+
+    local source_backup="${BACKUP_DIR}/Source_${V5_DB}_${TIMESTAMP}.sql"
+
+    log_info "  Backing up Source database: $V5_DB..."
+    if mysqldump -h "$V5_HOST" -u "$V5_USER" -p"$V5_PASSWORD" "$V5_DB" > "$source_backup" 2>/dev/null; then
+        local size=$(du -h "$source_backup" | cut -f1)
+        log_success "    ✅ Source backup created: $(basename $source_backup) ($size)"
+        echo "$source_backup"
+    else
+        log_error "Failed to backup Source database!"
+        return 1
+    fi
+}
+
+# Create "Target" backup (v6 before migration)
+create_target_backup() {
+    log_info "Creating Target backup (v6 before migration)"
+
+    local target_backup="${BACKUP_DIR}/Target_${V6_DB}_${TIMESTAMP}.sql"
+
+    log_info "  Backing up Target database: $V6_DB..."
+    if mysqldump -h "$V6_HOST" -u "$V6_USER" -p"$V6_PASSWORD" "$V6_DB" > "$target_backup" 2>/dev/null; then
+        local size=$(du -h "$target_backup" | cut -f1)
+        log_success "    ✅ Target backup created: $(basename $target_backup) ($size)"
+        echo "$target_backup"
+    else
+        log_error "Failed to backup Target database!"
+        return 1
+    fi
+}
+
+# Create "Target-Converted" backup (v6 after migration)
+create_target_converted_backup() {
+    log_info "Creating Target-Converted backup (v6 after migration)"
+
+    local target_converted_backup="${BACKUP_DIR}/Target-Converted_${V6_DB}_${TIMESTAMP}.sql"
+
+    log_info "  Backing up Target-Converted database: $V6_DB..."
+    if mysqldump -h "$V6_HOST" -u "$V6_USER" -p"$V6_PASSWORD" "$V6_DB" > "$target_converted_backup" 2>/dev/null; then
+        local size=$(du -h "$target_converted_backup" | cut -f1)
+        log_success "    ✅ Target-Converted backup created: $(basename $target_converted_backup) ($size)"
+        echo "$target_converted_backup"
+    else
+        log_error "Failed to backup Target-Converted database!"
+        return 1
+    fi
+}
+
 # =====================================================================
 # MAIN MIGRATION LOGIC
 # =====================================================================
@@ -128,8 +192,12 @@ main() {
     echo ""
     echo "╔════════════════════════════════════════════════════════════════╗"
     echo "║  AMXBans v5 to v6 Database Migration Script                   ║"
+    echo "║  With Automatic Backup Creation                               ║"
     echo "╚════════════════════════════════════════════════════════════════╝"
     echo ""
+
+    # Create backup directory
+    create_backup_dir
 
     # Test connections
     log_info "Testing database connections..."
@@ -163,6 +231,14 @@ main() {
     echo "  - AMX Admins: $v5_admins"
     echo "  - Web Admins: $v5_webadmins"
     echo "  - Ban Reasons: $v5_reasons"
+    echo ""
+
+    # Create backups BEFORE migration
+    log_info "Creating backups BEFORE migration..."
+    echo ""
+    SOURCE_BACKUP=$(create_source_backup) || exit 1
+    echo ""
+    TARGET_BACKUP=$(create_target_backup) || exit 1
     echo ""
 
     # Disable foreign key checks
@@ -323,11 +399,42 @@ main() {
 
     log_success "Data migration complete"
     echo ""
+
+    # Create backup AFTER migration
+    log_info "Creating backup AFTER migration..."
+    echo ""
+    TARGET_CONVERTED_BACKUP=$(create_target_converted_backup) || exit 1
+    echo ""
+
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║                   BACKUP SUMMARY                               ║"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Location: $BACKUP_DIR"
+    echo "Timestamp: $TIMESTAMP"
+    echo ""
+    echo "Three backups created:"
+    echo ""
+    echo "  1️⃣  SOURCE (v5 before migration)"
+    echo "     $(basename $SOURCE_BACKUP)"
+    echo "     $(ls -lh "$SOURCE_BACKUP" 2>/dev/null | awk '{print $5}')"
+    echo ""
+    echo "  2️⃣  TARGET (v6 before migration)"
+    echo "     $(basename $TARGET_BACKUP)"
+    echo "     $(ls -lh "$TARGET_BACKUP" 2>/dev/null | awk '{print $5}')"
+    echo ""
+    echo "  3️⃣  TARGET-CONVERTED (v6 after migration)"
+    echo "     $(basename $TARGET_CONVERTED_BACKUP)"
+    echo "     $(ls -lh "$TARGET_CONVERTED_BACKUP" 2>/dev/null | awk '{print $5}')"
+    echo ""
+
     log_info "Next steps:"
     echo "  1. Verify all data was migrated correctly"
     echo "  2. Run setup.php in the v6 web directory"
     echo "  3. Test the web interface"
     echo "  4. Update game server configurations"
+    echo "  5. Keep backups for archival"
     echo ""
 }
 
